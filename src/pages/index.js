@@ -1,115 +1,258 @@
-import Image from "next/image";
-import { Geist, Geist_Mono } from "next/font/google";
+import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+// Dynamically import face-api.js to avoid SSR issues
+const faceapi = typeof window !== 'undefined' ? require('face-api.js') : null;
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+function Home() {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [infoWajah, setInfoWajah] = useState(null);
+  const [error, setError] = useState(null);
+  const [lastDetection, setLastDetection] = useState(null); // Store last valid detection
+  const [isVideoReady, setIsVideoReady] = useState(false); // Track video readiness
+  const [isCameraStarted, setIsCameraStarted] = useState(false); // Track user-initiated camera start
+  const [isMounted, setIsMounted] = useState(false); // Track DOM mounting
 
-export default function Home() {
+  // Ensure video and canvas are mounted
+  useEffect(() => {
+    if (videoRef.current && canvasRef.current) {
+      console.log('Video and canvas elements mounted');
+      setIsMounted(true);
+    }
+  }, []);
+
+  // Load all models
+  useEffect(() => {
+    const loadModels = async () => {
+      if (!faceapi) {
+        console.error('face-api.js is not available');
+        setError('face-api.js tidak tersedia');
+        return;
+      }
+      try {
+        await Promise.all([
+          faceapi.nets.ssdMobilenetv1.loadFromUri('/models/ssd_mobilenetv1'),
+          faceapi.nets.faceLandmark68Net.loadFromUri('/models/face_landmark_68'),
+          faceapi.nets.faceExpressionNet.loadFromUri('/models/face_expression'),
+          faceapi.nets.ageGenderNet.loadFromUri('/models/age_gender_model'),
+        ]);
+        console.log('Models loaded successfully');
+        setIsLoading(false);
+      } catch (err) {
+        console.error('Error loading models:', err);
+        setError('Gagal memuat model: ' + err.message);
+      }
+    };
+    loadModels();
+  }, []);
+
+  // Start webcam with mobile-friendly constraints
+  const startVideo = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      const errMsg = 'Kamera tidak didukung oleh browser ini atau aplikasi tidak berjalan di HTTPS/localhost';
+      console.error(errMsg);
+      setError(errMsg);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user', // Use front-facing camera on mobile
+        },
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current.play().catch(err => {
+            console.error('Error playing video:', err);
+            setError('Gagal memainkan video: ' + err.message);
+          });
+          console.log('Video started, resolution:', videoRef.current?.videoWidth || 'unknown', 'x', videoRef.current?.videoHeight || 'unknown');
+          setIsVideoReady(true);
+          setError(null);
+        };
+      } else {
+        console.error('videoRef.current is null in startVideo');
+        setError('Video element tidak tersedia');
+      }
+    } catch (err) {
+      console.error('Error accessing camera:', err);
+      let errMsg = 'Gagal mengakses kamera: ' + err.message;
+      if (err.name === 'NotAllowedError') {
+        errMsg = 'Izin kamera ditolak. Harap izinkan akses kamera di pengaturan browser.';
+      } else if (err.name === 'NotFoundError') {
+        errMsg = 'Tidak ada kamera yang ditemukan di perangkat ini.';
+      }
+      setError(errMsg);
+    }
+  };
+
+  // Continuous face detection
+  useEffect(() => {
+    if (!faceapi || !isVideoReady || !isMounted) {
+      console.log('Detection not started: prerequisites not met', {
+        faceapi: !!faceapi,
+        isVideoReady,
+        isMounted,
+      });
+      return;
+    }
+
+    let intervalId;
+
+    const detectFace = async () => {
+      if (!videoRef.current || !canvasRef.current) {
+        console.log('Skipping detection: video or canvas ref is null');
+        return;
+      }
+      if (videoRef.current.readyState !== 4) {
+        console.log('Skipping detection: video not playable, readyState:', videoRef.current.readyState);
+        return;
+      }
+
+      try {
+        const options = new faceapi.SsdMobilenetv1Options({
+          minConfidence: 0.2, // Lenient detection
+        });
+        const detections = await faceapi
+          .detectAllFaces(videoRef.current, options)
+          .withFaceLandmarks()
+          .withAgeAndGender()
+          .withFaceExpressions();
+
+        // Double-check refs before drawing
+        if (!canvasRef.current || !videoRef.current) {
+          console.log('Refs became null during detection');
+          return;
+        }
+
+        const dims = faceapi.matchDimensions(canvasRef.current, videoRef.current, true);
+        const ctx = canvasRef.current.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        } else {
+          console.log('Canvas context is null');
+          return;
+        }
+
+        // Select the detection with the highest confidence
+        const detection = detections.sort((a, b) => b.detection.score - a.detection.score)[0];
+
+        if (detection) {
+          console.log('Face detected, confidence:', detection.detection.score);
+          setLastDetection({ ...detection, timestamp: Date.now() }); // Store with timestamp
+          const resized = faceapi.resizeResults(detection, dims);
+          faceapi.draw.drawDetections(canvasRef.current, resized);
+          faceapi.draw.drawFaceLandmarks(canvasRef.current, resized);
+
+          const ekspresiDominan = Object.entries(detection.expressions)
+            .sort((a, b) => b[1] - a[1])[0][0];
+
+          setInfoWajah({
+            umur: detection.age.toFixed(1),
+            gender: detection.gender,
+            emosi: ekspresiDominan,
+          });
+          setError(null);
+        } else {
+          console.log('No face detected');
+          // Use last valid detection for up to 1 second
+          if (lastDetection && Date.now() - lastDetection.timestamp < 1000) {
+            const resized = faceapi.resizeResults(lastDetection, dims);
+            faceapi.draw.drawDetections(canvasRef.current, resized);
+            faceapi.draw.drawFaceLandmarks(canvasRef.current, resized);
+            setInfoWajah({
+              umur: lastDetection.age.toFixed(1),
+              gender: lastDetection.gender,
+              emosi: Object.entries(lastDetection.expressions).sort((a, b) => b[1] - a[1])[0][0],
+            });
+          } else {
+            setInfoWajah(null);
+          }
+        }
+      } catch (err) {
+        console.error('Error during face detection:', err);
+        setError('Error deteksi wajah: ' + err.message);
+      }
+    };
+
+    intervalId = setInterval(detectFace, 33);
+    console.log('Started detection interval');
+
+    return () => {
+      console.log('Cleaning up detection interval');
+      clearInterval(intervalId);
+    };
+  }, [faceapi, isVideoReady, isMounted]);
+
   return (
-    <div
-      className={`${geistSans.className} ${geistMono.className} grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]`}
-    >
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/pages/index.js
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+    <main className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4">
+      <h1 className="text-3xl font-bold mb-6 text-center">Deteksi Wajah AI</h1>
+
+      <div className="mt-8 flex flex-col md:flex-row md:items-start md:gap-8 w-full max-w-6xl">
+        {/* Video Section */}
+        <div className="relative w-full md:w-2/3 aspect-video bg-gray-800 rounded-xl shadow-lg overflow-hidden border-2 border-gray-700">
+          {/* Video + Canvas */}
+          <video
+            ref={videoRef}
+            className="w-full h-full object-cover"
+            autoPlay
+            muted
+            style={{ display: isCameraStarted ? 'block' : 'none' }}
+          />
+          <canvas
+            ref={canvasRef}
+            className="absolute top-0 left-0 w-full h-full"
+            style={{ display: isCameraStarted ? 'block' : 'none' }}
+          />
+
+          {/* Tombol di tengah jika kamera belum aktif */}
+          {!isCameraStarted && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+              <button
+                onClick={() => {
+                  setIsCameraStarted(true);
+                  startVideo();
+                }}
+                className="bg-blue-500 text-white px-6 py-3 rounded-lg shadow hover:bg-blue-600 transition"
+              >
+                Mulai Kamera
+              </button>
+            </div>
+          )}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+
+        {/* Info Section */}
+        <div className="mt-6 md:mt-0 md:w-1/3 bg-gray-800 rounded-xl p-6 text-center shadow-md space-y-4 min-h-[180px] flex flex-col justify-center">
+          {error ? (
+            <p className="text-red-400 text-lg">{error}</p>
+          ) : isLoading ? (
+            <p className="text-yellow-400 text-lg">Memuat model AI wajah...</p>
+          ) : infoWajah ? (
+            <>
+              <p className="text-lg">
+                <strong>Umur:</strong> {infoWajah.umur} tahun
+              </p>
+              <p className="text-lg">
+                <strong>Jenis Kelamin:</strong> {infoWajah.gender === 'male' ? 'Laki-laki' : 'Perempuan'}
+              </p>
+              <p className="text-lg">
+                <strong>Ekspresi:</strong> {infoWajah.emosi}
+              </p>
+            </>
+          ) : (
+            <p className="text-gray-400 italic text-lg">Tidak ada wajah terdeteksi.</p>
+          )}
+        </div>
+      </div>
+    </main>
   );
 }
+
+// Disable SSR for this component
+export default dynamic(() => Promise.resolve(Home), { ssr: false });
