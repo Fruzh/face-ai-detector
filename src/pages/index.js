@@ -10,12 +10,11 @@ function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [infoWajah, setInfoWajah] = useState(null);
   const [error, setError] = useState(null);
-  const [lastDetection, setLastDetection] = useState(null); // Store last valid detection
-  const [isVideoReady, setIsVideoReady] = useState(false); // Track video readiness
-  const [isCameraStarted, setIsCameraStarted] = useState(false); // Track user-initiated camera start
-  const [isMounted, setIsMounted] = useState(false); // Track DOM mounting
+  const [lastDetection, setLastDetection] = useState(null);
+  const [isVideoReady, setIsVideoReady] = useState(false);
+  const [isCameraStarted, setIsCameraStarted] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
 
-  // Ensure video and canvas are mounted
   useEffect(() => {
     if (videoRef.current && canvasRef.current) {
       console.log('Video and canvas elements mounted');
@@ -23,7 +22,6 @@ function Home() {
     }
   }, []);
 
-  // Load all models
   useEffect(() => {
     const loadModels = async () => {
       if (!faceapi) {
@@ -48,7 +46,6 @@ function Home() {
     loadModels();
   }, []);
 
-  // Start webcam with mobile-friendly constraints
   const startVideo = async () => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       const errMsg = 'Kamera tidak didukung oleh browser ini atau aplikasi tidak berjalan di HTTPS/localhost';
@@ -62,7 +59,7 @@ function Home() {
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          facingMode: 'user', // Use front-facing camera on mobile
+          facingMode: 'user',
         },
       });
       if (videoRef.current) {
@@ -92,7 +89,6 @@ function Home() {
     }
   };
 
-  // Continuous face detection
   useEffect(() => {
     if (!faceapi || !isVideoReady || !isMounted) {
       console.log('Detection not started: prerequisites not met', {
@@ -117,19 +113,13 @@ function Home() {
 
       try {
         const options = new faceapi.SsdMobilenetv1Options({
-          minConfidence: 0.2, // Lenient detection
+          minConfidence: 0.2,
         });
         const detections = await faceapi
           .detectAllFaces(videoRef.current, options)
           .withFaceLandmarks()
           .withAgeAndGender()
           .withFaceExpressions();
-
-        // Double-check refs before drawing
-        if (!canvasRef.current || !videoRef.current) {
-          console.log('Refs became null during detection');
-          return;
-        }
 
         const dims = faceapi.matchDimensions(canvasRef.current, videoRef.current, true);
         const ctx = canvasRef.current.getContext('2d');
@@ -140,12 +130,11 @@ function Home() {
           return;
         }
 
-        // Select the detection with the highest confidence
         const detection = detections.sort((a, b) => b.detection.score - a.detection.score)[0];
 
         if (detection) {
           console.log('Face detected, confidence:', detection.detection.score);
-          setLastDetection({ ...detection, timestamp: Date.now() }); // Store with timestamp
+          setLastDetection({ ...detection, timestamp: Date.now() });
           const resized = faceapi.resizeResults(detection, dims);
           faceapi.draw.drawDetections(canvasRef.current, resized);
           faceapi.draw.drawFaceLandmarks(canvasRef.current, resized);
@@ -161,7 +150,6 @@ function Home() {
           setError(null);
         } else {
           console.log('No face detected');
-          // Use last valid detection for up to 1 second
           if (lastDetection && Date.now() - lastDetection.timestamp < 1000) {
             const resized = faceapi.resizeResults(lastDetection, dims);
             faceapi.draw.drawDetections(canvasRef.current, resized);
@@ -188,6 +176,7 @@ function Home() {
       console.log('Cleaning up detection interval');
       clearInterval(intervalId);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faceapi, isVideoReady, isMounted]);
 
   return (
@@ -195,9 +184,7 @@ function Home() {
       <h1 className="text-3xl font-bold mb-6 text-center">Deteksi Wajah AI</h1>
 
       <div className="mt-8 flex flex-col md:flex-row md:items-start md:gap-8 w-full max-w-6xl">
-        {/* Video Section */}
         <div className="relative w-full md:w-2/3 aspect-video bg-gray-800 rounded-xl shadow-lg overflow-hidden border-2 border-gray-700">
-          {/* Video + Canvas */}
           <video
             ref={videoRef}
             className="w-full h-full object-cover"
@@ -211,7 +198,6 @@ function Home() {
             style={{ display: isCameraStarted ? 'block' : 'none' }}
           />
 
-          {/* Tombol di tengah jika kamera belum aktif */}
           {!isCameraStarted && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm">
               <button
@@ -227,7 +213,6 @@ function Home() {
           )}
         </div>
 
-        {/* Info Section */}
         <div className="mt-6 md:mt-0 md:w-1/3 bg-gray-800 rounded-xl p-6 text-center shadow-md space-y-4 min-h-[180px] flex flex-col justify-center">
           {error ? (
             <p className="text-red-400 text-lg">{error}</p>
@@ -254,5 +239,4 @@ function Home() {
   );
 }
 
-// Disable SSR for this component
 export default dynamic(() => Promise.resolve(Home), { ssr: false });
