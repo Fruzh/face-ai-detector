@@ -1,4 +1,4 @@
-# 👁️ Face AI Detector
+# 😎 Face AI Detector
 
 A face detection web app built with **Next.js**, **face-api.js**, and **Tailwind CSS**. This app uses your webcam to detect faces, recognize expressions, age, and gender in real-time.
 
@@ -55,5 +55,3 @@ The original models are provided by [@justadudewhohacks](https://github.com/just
 This project is licensed under the **MIT License**.
 
 Model files are referenced from the [`face-api.js-models`](https://github.com/justadudewhohacks/face-api.js-models) repository and belong to their respective authors.
-
----
